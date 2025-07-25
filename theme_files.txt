@@ -1,0 +1,149 @@
+### about.json
+{
+  "name": "Discourse Referral Theme Component",
+  "about": "Adds a referral system with invite-based links and a UI panel for tracking referred users.",
+  "version": "0.1",
+  "authors": "Grok (based on user request)",
+  "component": true
+}
+
+### settings.yml
+referral_enabled:
+  default: true
+  type: bool
+  description: "Enable or disable the referral system."
+
+### assets/javascripts/discourse/initializers/referral-nav.js.es6
+import { withPluginApi } from "discourse/lib/plugin-api";
+
+export default {
+  name: "referral-nav",
+  initialize() {
+    withPluginApi("0.8.7", (api) => {
+      api.addUserMenuGlyph({
+        label: "Referrals",
+        icon: "gift",
+        href: (user) => `/u/${user.username}/referrals`,
+        className: "referrals-link"
+      });
+
+      api.addNavigationBarItem({
+        name: "referrals",
+        displayName: "Referrals",
+        href: (user) => `/u/${user.username}/referrals`
+      });
+    });
+  }
+};
+
+### assets/javascripts/discourse/app/routes/user-referrals.js.es6
+import DiscourseRoute from "discourse/routes/discourse";
+
+export default DiscourseRoute.extend({
+  model() {
+    return this.modelFor("user");
+  },
+
+  setupController(controller, model) {
+    controller.set("model", model);
+    this.controllerFor("user-referrals").loadData();
+  }
+});
+
+### assets/javascripts/discourse/app/controllers/user-referrals.js.es6
+import Controller from "@ember/controller";
+import { ajax } from "discourse/lib/ajax";
+import { property } from "discourse/lib/computed";
+import { popupAjaxError } from "discourse/lib/ajax-error";
+
+export default Controller.extend({
+  referralCode: null,
+  totalPoints: 0,
+  referrals: [],
+  referralLink: null,
+
+  loadData() {
+    const user = this.model;
+    ajax(`/u/${user.username}.json`).then((data) => {
+      const customFields = data.user.custom_fields || {};
+      const referralCode = customFields.referral_code || null;
+      const totalPoints = customFields.referral_points || 0;
+
+      // Fetch invites created by the user
+      ajax(`/invites/show.json?username=${user.username}`).then((inviteData) => {
+        const referrals = inviteData.invites
+          .filter((invite) => invite.redeemed)
+          .map((invite) => ({
+            username: invite.user ? invite.user.username : "Unknown",
+            date: invite.redeemed_at
+          }));
+
+        this.setProperties({
+          referralCode,
+          totalPoints,
+          referrals,
+          referralLink: referralCode ? `${window.location.origin}/i/${referralCode}` : null
+        });
+      }).catch(popupAjaxError);
+    }).catch(popupAjaxError);
+  },
+
+  actions: {
+    generateReferral() {
+      ajax("/invites/link", {
+        type: "POST",
+        data: { user_id: this.model.id }
+      }).then((data) => {
+        const referralCode = data.invite_key;
+        ajax(`/u/${this.model.username}/custom_fields.json`, {
+          type: "PUT",
+          data: { custom_fields: { referral_code: referralCode } }
+        }).then(() => {
+          this.setProperties({
+            referralCode,
+            referralLink: `${window.location.origin}/i/${referralCode}`
+          });
+        }).catch(popupAjaxError);
+      }).catch(popupAjaxError);
+    }
+  }
+});
+
+### assets/javascripts/discourse/app/templates/user/referrals.hbs
+<section class="user-main">
+  <div class="referral-panel">
+    <h2>Referrals</h2>
+    {{#if referralCode}}
+      <p>Your Referral Link: <a href="{{referralLink}}">{{referralLink}}</a> (Copy and share on WhatsApp, Telegram, Facebook, etc.)</p>
+      <p>Total Points: {{totalPoints}}</p>
+      {{#if referrals.length}}
+        <ul>
+          {{#each referrals as |ref|}}
+            <li>{{ref.username}} - {{moment-format ref.date "YYYY-MM-DD HH:mm"}}</li>
+          {{/each}}
+        </ul>
+      {{else}}
+        <p>No referrals yet.</p>
+      {{/if}}
+    {{else}}
+      <button {{action "generateReferral"}}>Generate Referral Link</button>
+    {{/if}}
+  </div>
+</section>
+
+### assets/stylesheets/referrals.css
+.referral-panel {
+  padding: 20px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  background: #f9f9f9;
+}
+
+.referral-panel ul {
+  list-style: none;
+  padding: 0;
+}
+
+.referral-panel li {
+  margin-bottom: 10px;
+}
